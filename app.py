@@ -74,7 +74,7 @@ def predict(hist):
         return "TAI" if p > 0.5 else "XIU", 60
 
     models = [
-        lambda h: h[-60:].count("TAI") / len(h[-60:]),
+        lambda h: h[-60:].count("TAI") / len(h[-60:]) if len(h) > 0 else 0.5,
         lambda h: get_markov_prob(1, h),
         lambda h: get_markov_prob(2, h),
         lambda h: get_markov_prob(3, h),
@@ -116,25 +116,49 @@ def predict(hist):
 def api():
     global cache, cache_time
 
+    # cache 5s
     if time.time() - cache_time < 5 and cache:
         return jsonify(cache)
 
     try:
-        res = requests.get(API_GOC)
+        res = requests.get(API_GOC, timeout=5)
         data = res.json()
 
-        sessions = data.get("data", [])
+        # ===== FIX LỖI CHÍNH =====
+        sessions = data.get("data")
+
+        if not sessions or not isinstance(sessions, list):
+            return jsonify({
+                "status": "error",
+                "msg": "API gốc không có dữ liệu"
+            })
 
         history = []
+
         for s in sessions:
-            total = int(s["total"])
-            history.append("TAI" if total >= 11 else "XIU")
+            try:
+                total = int(s.get("total", 0))
+                history.append("TAI" if total >= 11 else "XIU")
+            except:
+                continue
 
-        # ===== LẤY PHIÊN GẦN NHẤT =====
-        last = sessions[0]
+        if len(history) == 0:
+            return jsonify({
+                "status": "error",
+                "msg": "Không có dữ liệu hợp lệ"
+            })
 
-        phien_truoc = int(last["id"])
-        tong_xuc_xac = int(last["total"])
+        # ===== FIX LỖI INDEX =====
+        last = sessions[0] if len(sessions) > 0 else None
+
+        if not last:
+            return jsonify({
+                "status": "error",
+                "msg": "Không lấy được phiên gần nhất"
+            })
+
+        phien_truoc = int(last.get("id", 0))
+        tong_xuc_xac = int(last.get("total", 0))
         phien_tiep = phien_truoc + 1
 
         du_doan, do_tin_cay = predict(history)
@@ -153,4 +177,7 @@ def api():
         return jsonify(result)
 
     except Exception as e:
-        return jsonify({"error": str(e)})
+        return jsonify({
+            "status": "error",
+            "msg": str(e)
+        })
