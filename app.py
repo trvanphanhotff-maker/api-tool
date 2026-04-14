@@ -74,7 +74,7 @@ def predict(hist):
         return "TAI" if p > 0.5 else "XIU", 60
 
     models = [
-        lambda h: h[-60:].count("TAI") / len(h[-60:]) if len(h) > 0 else 0.5,
+        lambda h: h[-60:].count("TAI") / len(h[-60:]),
         lambda h: get_markov_prob(1, h),
         lambda h: get_markov_prob(2, h),
         lambda h: get_markov_prob(3, h),
@@ -121,11 +121,14 @@ def api():
         return jsonify(cache)
 
     try:
-        res = requests.get(API_GOC, timeout=5)
+        res = requests.get(API_GOC, headers={
+            "User-Agent": "Mozilla/5.0"
+        }, timeout=5)
+
         data = res.json()
 
-        # ===== FIX LỖI CHÍNH =====
-        sessions = data.get("data")
+        # 🔥 FIX CHUẨN API
+        sessions = data.get("list")
 
         if not sessions or not isinstance(sessions, list):
             return jsonify({
@@ -137,7 +140,7 @@ def api():
 
         for s in sessions:
             try:
-                total = int(s.get("total", 0))
+                total = int(s.get("point", 0))
                 history.append("TAI" if total >= 11 else "XIU")
             except:
                 continue
@@ -148,17 +151,11 @@ def api():
                 "msg": "Không có dữ liệu hợp lệ"
             })
 
-        # ===== FIX LỖI INDEX =====
-        last = sessions[0] if len(sessions) > 0 else None
-
-        if not last:
-            return jsonify({
-                "status": "error",
-                "msg": "Không lấy được phiên gần nhất"
-            })
+        # phiên gần nhất
+        last = sessions[0]
 
         phien_truoc = int(last.get("id", 0))
-        tong_xuc_xac = int(last.get("total", 0))
+        tong_xuc_xac = int(last.get("point", 0))
         phien_tiep = phien_truoc + 1
 
         du_doan, do_tin_cay = predict(history)
@@ -181,3 +178,8 @@ def api():
             "status": "error",
             "msg": str(e)
         })
+
+
+@app.route("/")
+def home():
+    return "API đang chạy 😎 dùng /api để lấy dữ liệu"
