@@ -1,15 +1,16 @@
-l from flask import Flask, Response
+from flask import Flask, Response
+from flask_cors import CORS
 import requests
-import math
 
 app = Flask(__name__)
+CORS(app)
 
 API_URL = "https://wtxmd52.macminim6.online/v1/txmd5/lite-sessions?cp=R&cl=R&pf=web&at=7aa1c7e7ea0160fd97524740774a4c61"
 
 MAX_HISTORY = 200
 history = []
 
-# ================= FETCH GIỐNG HTML =================
+# ================= FETCH =================
 def fetch_sessions():
     global history
     try:
@@ -27,26 +28,22 @@ def fetch_sessions():
         } for s in data["list"]]
 
         existing_ids = set(h["id"] for h in history)
-        updated = False
 
-        # 🔥 QUAN TRỌNG: đảo ngược giống HTML
+        # ⚠️ QUAN TRỌNG: đảo ngược như HTML
         for s in reversed(new_sessions):
             if s["id"] not in existing_ids:
                 history.append(s)
-                existing_ids.add(s["id"])
-                updated = True
 
-        # giữ max 200
+        # giữ 200 phiên
         if len(history) > MAX_HISTORY:
             history[:] = history[-MAX_HISTORY:]
 
-        return history[-1] if history else None
+        return new_sessions[0]
 
     except:
         return None
 
-
-# ================= MARKOV =================
+# ================= ALGO =================
 def get_markov_prob(order, hist):
     if len(hist) < order + 1:
         return 0.5
@@ -54,8 +51,7 @@ def get_markov_prob(order, hist):
     trans = {}
 
     for i in range(order, len(hist)):
-        key = "".join(hist[i - order:i])
-
+        key = "".join(hist[i-order:i])
         if key not in trans:
             trans[key] = {"TAI": 0, "XIU": 0, "total": 0}
 
@@ -64,14 +60,12 @@ def get_markov_prob(order, hist):
         trans[key]["total"] += 1
 
     last_key = "".join(hist[-order:])
-
     if last_key in trans and trans[last_key]["total"] > 0:
         return trans[last_key]["TAI"] / trans[last_key]["total"]
 
     return 0.5
 
 
-# ================= NGRAM =================
 def get_ngram_prob(n, hist):
     if len(hist) < n + 1:
         return 0.5
@@ -81,18 +75,16 @@ def get_ngram_prob(n, hist):
     tai_after = 0
 
     for i in range(n, len(hist)):
-        seq = "".join(hist[i - n:i])
-
+        seq = "".join(hist[i-n:i])
         if seq == last:
             matches += 1
             if hist[i] == "TAI":
                 tai_after += 1
 
-    return tai_after / matches if matches > 0 else 0.5
+    return tai_after / matches if matches else 0.5
 
 
-# ================= ACCURACY =================
-def calculate_model_accuracy(model_fn, hist):
+def calc_accuracy(model_fn, hist):
     if len(hist) < 12:
         return 0.55
 
@@ -108,84 +100,74 @@ def calculate_model_accuracy(model_fn, hist):
             correct += 1
         total += 1
 
-    return correct / total if total > 0 else 0.55
+    return correct / total if total else 0.55
 
 
-# ================= PREDICT (Y HỆT HTML) =================
 def predict():
     if len(history) < 8:
-        count_tai = sum(1 for h in history if h["result"] == "TAI")
-        p = count_tai / len(history) if history else 0.5
+        tai = sum(1 for h in history if h["result"] == "TAI")
+        p = tai / len(history) if history else 0.5
 
-        conf = round(max(52, min(68, 50 + 35 * abs(p - 0.5) * 2)))
+        conf = max(52, min(68, round(50 + 35 * abs(p - 0.5) * 2)))
 
         return ("TAI" if p > 0.5 else "XIU", conf)
 
     results = [h["result"] for h in history]
 
     models = [
-        # freq recent
-        lambda h: (
-            sum(1 for x in h[-min(60, len(h)):] if x == "TAI") /
-            len(h[-min(60, len(h)):])
-        ),
-
+        lambda h: sum(1 for x in h[-min(60,len(h)):] if x=="TAI") / len(h[-min(60,len(h)):] ),
         lambda h: get_markov_prob(1, h),
         lambda h: get_markov_prob(2, h),
         lambda h: get_markov_prob(3, h),
         lambda h: get_ngram_prob(3, h),
-        lambda h: get_ngram_prob(4, h),
+        lambda h: get_ngram_prob(4, h)
     ]
 
-    accuracies = [calculate_model_accuracy(m, results) for m in models]
+    accs = [calc_accuracy(m, results) for m in models]
 
-    weighted_sum = 0
-    total_weight = 0
+    weighted = 0
+    total_w = 0
 
-    for i, model in enumerate(models):
-        pTAI = model(results)
-        acc = accuracies[i]
+    for m, acc in zip(models, accs):
+        weighted += m(results) * acc
+        total_w += acc
 
-        weighted_sum += pTAI * acc
-        total_weight += acc
+    final_p = weighted / total_w if total_w else 0.5
 
-    finalProbTAI = weighted_sum / total_weight if total_weight > 0 else 0.5
-
-    # 🔥 STREAK BOOST GIỐNG HTML
-    lastResult = results[-1]
-
-    if lastResult == "TAI":
-        streakP = get_markov_prob(1, results)
+    # ⚠️ FIX CHUẨN HTML
+    last = results[-1]
+    if last == "TAI":
+        streak_p = get_markov_prob(1, results)
     else:
-        streakP = 1 - get_markov_prob(1, results)
+        streak_p = 1 - get_markov_prob(1, results)
 
-    finalProbTAI = (finalProbTAI * 0.85) + (streakP * 0.15)
+    final_p = (final_p * 0.85) + (streak_p * 0.15)
 
-    prediction = "TAI" if finalProbTAI > 0.5 else "XIU"
+    pred = "TAI" if final_p > 0.5 else "XIU"
 
-    # 🔥 CONFIDENCE Y HỆT HTML
-    avgAccuracy = sum(accuracies) / len(accuracies)
+    avg_acc = sum(accs) / len(accs)
 
-    variance = sum(
-        (models[i](results) - finalProbTAI) ** 2
-        for i in range(len(models))
-    ) / len(models)
+    # ⚠️ FIX VARIANCE (bạn sai chỗ này)
+    variance = 0
+    for m in models:
+        p = m(results)
+        variance += (p - final_p) ** 2
+    variance /= len(models)
 
-    confidence = round(
+    conf = round(
         58 +
-        (avgAccuracy * 28) +
-        ((1 - math.sqrt(variance) * 1.8) * 14)
+        (avg_acc * 28) +
+        ((1 - (variance ** 0.5) * 1.8) * 14)
     )
 
-    confidence = max(52, min(99, confidence))
+    conf = max(52, min(99, conf))
 
     if len(history) < 30:
-        confidence = min(confidence, 72)
-
+        conf = min(conf, 72)
     if len(history) > 150:
-        confidence = max(confidence, 68)
+        conf = max(conf, 68)
 
-    return prediction, confidence
+    return pred, conf
 
 
 # ================= ROUTE =================
